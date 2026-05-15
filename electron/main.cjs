@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, screen, shell } = require('electron');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 const fs = require('node:fs');
 const jwt = require('jsonwebtoken');
@@ -189,10 +190,15 @@ function createWindow() {
           if (callbackUrl.startsWith('http://127.0.0.1:5173/callback')) {
             event.preventDefault();
             const url = new URL(callbackUrl);
-            const devUrl = isDev
-              ? `http://127.0.0.1:5173/${url.search}`
-              : callbackUrl;
-            win.loadURL(devUrl);
+            let target;
+            if (isDev) {
+              target = `http://127.0.0.1:5173/${url.search}`;
+            } else {
+              const fileUrl = pathToFileURL(path.join(__dirname, '..', 'dist', 'index.html'));
+              fileUrl.search = url.search;
+              target = fileUrl.href;
+            }
+            win.loadURL(target);
             authWin.close();
           }
         };
@@ -241,8 +247,9 @@ function createWindow() {
       if (parsed.pathname === '/callback' && parsed.searchParams.has('code')) {
         if (!isDev) {
           event.preventDefault();
-          const callbackUrl = `file://${path.join(__dirname, '..', 'dist', 'index.html')}${parsed.search}`;
-          win.loadURL(callbackUrl);
+          const fileUrl = pathToFileURL(path.join(__dirname, '..', 'dist', 'index.html'));
+          fileUrl.search = parsed.search;
+          win.loadURL(fileUrl.href);
         }
       }
     } catch {
