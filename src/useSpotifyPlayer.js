@@ -1,10 +1,10 @@
 /**
- * React hook for Spotify playback via yt-dlp audio streams.
+ * React hook for Spotify playback via YouTube audio streams.
  *
- * Uses Spotify API for metadata/playlists, then fetches audio
- * from YouTube via yt-dlp in the main process. Plays via HTML5 Audio.
+ * Spotify API supplies metadata/playlists; audio is fetched from YouTube
+ * in the main process (cupid-audio:// protocol) and played via HTML5 Audio.
  *
- * Exposes the same interface as useAudioPlayer.
+ * Same interface as useAudioPlayer.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -13,8 +13,23 @@ export default function useSpotifyPlayer(tracks, playMode = 'normal') {
   const audioRef = useRef(new Audio());
   const playModeRef = useRef(playMode);
   playModeRef.current = playMode;
+  // Shared between prefetch, next(), and onEnded so we play what we warmed
+  const nextIdxRef = useRef(null);
   const [trackIndex, setTrackIndex] = useState(0);
+
+  // Reset to track 0 on playlist change, otherwise the stale index can be
+  // out of bounds for the new playlist
+  const prevTracksRef = useRef(tracks);
+  if (prevTracksRef.current !== tracks) {
+    prevTracksRef.current = tracks;
+    nextIdxRef.current = null;
+    setTrackIndex(0);
+  }
   const [isPlaying, setIsPlaying] = useState(false);
+  // Ref so the async load effect sees the latest value when it resolves,
+  // not the one captured when it started
+  const isPlayingRef = useRef(false);
+  isPlayingRef.current = isPlaying;
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -27,6 +42,7 @@ export default function useSpotifyPlayer(tracks, playMode = 'normal') {
 
   const audio = audioRef.current;
   audio.volume = muted ? 0 : volume;
+  audio.preload = 'auto';
 
   const track = tracks[trackIndex] ?? {
     title: 'No track',
@@ -35,7 +51,7 @@ export default function useSpotifyPlayer(tracks, playMode = 'normal') {
     uri: null,
   };
 
-  // ── Load track via yt-dlp when index or tracks change ─────
+  // ── Load track when index or tracks change ────────────────
   useEffect(() => {
     if (tracks.length === 0) return;
     const t = tracks[trackIndex];
@@ -48,13 +64,13 @@ export default function useSpotifyPlayer(tracks, playMode = 'normal') {
       try {
         const url = await window.cupid.getStreamUrl(t.title, t.artist);
         if (cancelled) return;
+        // setting src triggers loading; an explicit audio.load() would reset it
         audio.src = url;
-        audio.load();
-        if (isPlaying) {
+        if (isPlayingRef.current) {
           audio.play().catch(() => {});
         }
       } catch (err) {
-        console.error('[yt-dlp] Failed to get stream:', err.message);
+        console.error('Failed to get stream:', err.message);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -65,16 +81,40 @@ export default function useSpotifyPlayer(tracks, playMode = 'normal') {
     return () => { cancelled = true; };
   }, [trackIndex, tracks]);
 
-  // ── Prefetch next track ───────────────────────────────────
+  // ── Precompute next index + prefetch surrounding tracks ───
   useEffect(() => {
-    if (tracks.length === 0) return;
-    const nextIdx = (trackIndex + 1) % tracks.length;
-    const nextTrack = tracks[nextIdx];
-    if (nextTrack) {
-      // Fire and forget — just warms the cache in main process
-      window.cupid.getStreamUrl(nextTrack.title, nextTrack.artist).catch(() => {});
+    if (tracks.length === 0) {
+      nextIdxRef.current = null;
+      return;
     }
-  }, [trackIndex, tracks]);
+
+    const prefetched = new Set([trackIndex]);
+    const prefetch = (idx) => {
+      if (idx < 0 || idx >= tracks.length || prefetched.has(idx)) return;
+      const t = tracks[idx];
+      if (!t) return;
+      prefetched.add(idx);
+      window.cupid.getStreamUrl(t.title, t.artist).catch(() => {});
+    };
+
+    let nextIdx;
+    if (playMode === 'shuffle' && tracks.length > 1) {
+      do {
+        nextIdx = Math.floor(Math.random() * tracks.length);
+      } while (nextIdx === trackIndex);
+    } else {
+      nextIdx = (trackIndex + 1) % tracks.length;
+    }
+    nextIdxRef.current = nextIdx;
+
+    prefetch(nextIdx);
+
+    // Shuffle's second hop is unpredictable, so only look ahead in linear mode
+    if (playMode !== 'shuffle') {
+      prefetch((trackIndex + 2) % tracks.length);
+      prefetch((trackIndex - 1 + tracks.length) % tracks.length);
+    }
+  }, [trackIndex, tracks, playMode]);
 
   // ── Audio event listeners ─────────────────────────────────
   useEffect(() => {
@@ -96,6 +136,9 @@ export default function useSpotifyPlayer(tracks, playMode = 'normal') {
         return;
       }
       setTrackIndex((prev) => {
+        if (nextIdxRef.current !== null && nextIdxRef.current !== prev) {
+          return nextIdxRef.current;
+        }
         if (playModeRef.current === 'shuffle' && tracks.length > 1) {
           let next;
           do { next = Math.floor(Math.random() * tracks.length); } while (next === prev);
@@ -130,6 +173,10 @@ export default function useSpotifyPlayer(tracks, playMode = 'normal') {
 
   const next = useCallback(() => {
     setTrackIndex((prev) => {
+      // Prefer the precomputed next (matches what prefetch warmed)
+      if (nextIdxRef.current !== null && nextIdxRef.current !== prev) {
+        return nextIdxRef.current;
+      }
       if (playModeRef.current === 'shuffle' && tracks.length > 1) {
         let n;
         do { n = Math.floor(Math.random() * tracks.length); } while (n === prev);

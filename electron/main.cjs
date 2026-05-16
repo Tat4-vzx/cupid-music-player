@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { app, BrowserWindow, ipcMain, screen, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, shell, protocol, net } = require('electron');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const path = require('node:path');
@@ -9,6 +9,14 @@ const fs = require('node:fs');
 const jwt = require('jsonwebtoken');
 
 const execFileAsync = promisify(execFile);
+
+// Custom protocol used by the renderer's <audio> — main fetches the actual
+// stream so we can attach headers and forward Range requests for seeking.
+// Must be registered as privileged before app.whenReady fires.
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'cupid-audio',
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true },
+}]);
 
 // ── Apple Music developer token ──────────────────────────
 let appleMusicToken = null;
@@ -47,12 +55,39 @@ function generateAppleMusicToken() {
 }
 
 // ── yt-dlp stream URL fetcher ────────────────────────────
-// Cache stream URLs for 25 minutes (they expire after ~30min)
+// streamCache: stream URLs (expire after ~30min on YT's side)
+// videoIdCache: title → video ID, persisted so repeat lookups skip search
 const streamCache = new Map();
+const pendingRequests = new Map();
+const videoIdCache = new Map();
 const CACHE_TTL = 25 * 60 * 1000;
 
+let videoIdCacheLoaded = false;
+let videoIdCacheFile = null;
+let videoIdSaveTimer = null;
+
+function loadVideoIdCache() {
+  if (videoIdCacheLoaded) return;
+  videoIdCacheLoaded = true;
+  try {
+    videoIdCacheFile = path.join(app.getPath('userData'), 'video-id-cache.json');
+    const raw = fs.readFileSync(videoIdCacheFile, 'utf8');
+    for (const [k, v] of Object.entries(JSON.parse(raw))) videoIdCache.set(k, v);
+  } catch {
+    // no cache file yet
+  }
+}
+
+function persistVideoIdCache() {
+  if (!videoIdCacheFile) return;
+  clearTimeout(videoIdSaveTimer);
+  videoIdSaveTimer = setTimeout(() => {
+    const obj = Object.fromEntries(videoIdCache);
+    fs.promises.writeFile(videoIdCacheFile, JSON.stringify(obj)).catch(() => {});
+  }, 500);
+}
+
 function getYtDlpPath() {
-  // Use bundled yt-dlp from node_modules, fall back to system
   try {
     return require('yt-dlp-exec/src/constants').YOUTUBE_DL_PATH || 'yt-dlp';
   } catch {
@@ -60,29 +95,134 @@ function getYtDlpPath() {
   }
 }
 
-async function getStreamUrl(title, artist) {
-  const cacheKey = `${title}::${artist}`;
-  const cached = streamCache.get(cacheKey);
-  if (cached && Date.now() - cached.time < CACHE_TTL) {
-    return cached.url;
+const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+
+// youtubei.js handles YT Music search (audio uploads, not music videos).
+// URL extraction stays on yt-dlp — YT now withholds stream URLs from WEB
+// client responses without a PoToken, which youtubei.js can't generate.
+let innertubePromise = null;
+function getInnertube() {
+  if (innertubePromise) return innertubePromise;
+  innertubePromise = (async () => {
+    const { Innertube, UniversalCache } = await import('youtubei.js');
+    return Innertube.create({
+      cache: new UniversalCache(true, path.join(app.getPath('userData'), 'innertube-cache')),
+      generate_session_locally: true,
+    });
+  })().catch((err) => {
+    innertubePromise = null;
+    throw err;
+  });
+  return innertubePromise;
+}
+
+async function searchYouTubeMusic(title, artist) {
+  const yt = await getInnertube();
+  const search = await yt.music.search(`${title} ${artist}`, { type: 'song' });
+
+  let top = search.songs?.contents?.find((c) => c?.id);
+  if (!top) {
+    for (const shelf of search.contents || []) {
+      const item = shelf?.contents?.find?.((c) => c?.id);
+      if (item) { top = item; break; }
+    }
   }
+  if (!top?.id) throw new Error('No song result');
+  return top.id;
+}
 
-  const query = `ytsearch1:"${title}" ${artist}`;
-  const ytDlp = getYtDlpPath();
-
-  const { stdout } = await execFileAsync(ytDlp, [
-    query,
+async function ytDlpExtract(target) {
+  const { stdout } = await execFileAsync(getYtDlpPath(), [
+    target,
     '-f', 'bestaudio[ext=m4a]/bestaudio',
     '--no-playlist',
     '--no-warnings',
-    '-g', // print URL only
+    '-g',
   ], { timeout: 15000 });
+  return stdout.trim();
+}
 
-  const url = stdout.trim();
-  if (!url) throw new Error('No stream URL found');
+async function ytDlpSearch(title, artist) {
+  const { stdout } = await execFileAsync(getYtDlpPath(), [
+    `ytsearch1:"${title}" ${artist}`,
+    '-f', 'bestaudio[ext=m4a]/bestaudio',
+    '--no-playlist',
+    '--no-warnings',
+    '--print', '%(id)s',
+    '-g',
+  ], { timeout: 15000 });
+  const lines = stdout.trim().split('\n').map((l) => l.trim()).filter(Boolean);
+  const id = lines.find((l) => YT_ID_RE.test(l));
+  const url = lines.find((l) => l.startsWith('http'));
+  if (!id || !url) throw new Error('yt-dlp search returned no usable result');
+  return { id, url };
+}
 
-  streamCache.set(cacheKey, { url, time: Date.now() });
-  return url;
+// videoId → { url, time }. yt-dlp URLs last ~30min — same TTL as streamCache
+const decipheredCache = new Map();
+const pendingDecipher = new Map();
+
+async function resolveStreamUrl(videoId) {
+  const cached = decipheredCache.get(videoId);
+  if (cached && Date.now() - cached.time < CACHE_TTL) return cached.url;
+
+  const inflight = pendingDecipher.get(videoId);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    try {
+      const url = await ytDlpExtract(`https://www.youtube.com/watch?v=${videoId}`);
+      decipheredCache.set(videoId, { url, time: Date.now() });
+      return url;
+    } finally {
+      pendingDecipher.delete(videoId);
+    }
+  })();
+
+  pendingDecipher.set(videoId, promise);
+  return promise;
+}
+
+async function getStreamUrl(title, artist) {
+  const cacheKey = `${title}::${artist}`;
+  const cached = streamCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < CACHE_TTL) return cached.url;
+
+  const inflight = pendingRequests.get(cacheKey);
+  if (inflight) return inflight;
+
+  loadVideoIdCache();
+  let videoId = videoIdCache.get(cacheKey);
+
+  const promise = (async () => {
+    try {
+      if (!videoId) {
+        try {
+          videoId = await searchYouTubeMusic(title, artist);
+        } catch (err) {
+          console.warn('[youtubei search] fallback to yt-dlp:', err.message);
+          const result = await ytDlpSearch(title, artist);
+          videoId = result.id;
+          // We already have a usable URL from yt-dlp — seed the decipher cache
+          decipheredCache.set(videoId, { url: result.url, time: Date.now() });
+        }
+        videoIdCache.set(cacheKey, videoId);
+        persistVideoIdCache();
+      }
+
+      // Best-effort pre-warm so the renderer's protocol fetch hits the decipher cache
+      resolveStreamUrl(videoId).catch(() => {});
+
+      const url = `cupid-audio://stream?id=${encodeURIComponent(videoId)}`;
+      streamCache.set(cacheKey, { url, time: Date.now() });
+      return url;
+    } finally {
+      pendingRequests.delete(cacheKey);
+    }
+  })();
+
+  pendingRequests.set(cacheKey, promise);
+  return promise;
 }
 
 const isDev = process.env.NODE_ENV === 'development';
@@ -290,7 +430,41 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(path.join(__dirname, '..', 'assets', 'pink', 'favicon.png'));
   }
+
+  protocol.handle('cupid-audio', async (request) => {
+    try {
+      const id = new URL(request.url).searchParams.get('id');
+      if (!id) return new Response('missing id', { status: 400 });
+
+      const streamUrl = await resolveStreamUrl(id);
+
+      const headers = {
+        Origin: 'https://www.youtube.com',
+        Referer: 'https://www.youtube.com/',
+        'User-Agent': 'Mozilla/5.0',
+      };
+      const range = request.headers.get('Range');
+      if (range) headers.Range = range;
+
+      const upstream = await net.fetch(streamUrl, { headers });
+      const respHeaders = new Headers(upstream.headers);
+      respHeaders.set('Content-Type', 'audio/mp4');
+      return new Response(upstream.body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: respHeaders,
+      });
+    } catch (err) {
+      console.error('[cupid-audio]', err.message);
+      return new Response('failed', { status: 502 });
+    }
+  });
+
   createWindow();
+
+  // Pre-warm both engines so the first track load skips cold-start
+  getInnertube().catch(() => {});
+  execFile(getYtDlpPath(), ['--version'], () => {});
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

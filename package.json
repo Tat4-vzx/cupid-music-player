@@ -20,6 +20,7 @@
     "music-metadata-browser": "^2.5.11",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "youtubei.js": "^17.0.1",
     "yt-dlp-exec": "^1.0.2"
   },
   "devDependencies": {
@@ -34,7 +35,7 @@
     "wait-on": "^8.0.1"
   },
   "build": {
-    "appId": "com.cupidbity.cupid-player",
+    "appId": "com.codedbycupidity.cupid-player",
     "productName": "Cupid Player",
     "files": [
       "dist/**/*",
