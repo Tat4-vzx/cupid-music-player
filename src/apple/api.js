@@ -7,6 +7,31 @@
 import { getMusicKit, initMusicKit } from './auth.js';
 
 /**
+ * Fetch every page of an Apple Music library endpoint.
+ *
+ * MusicKit responses include a `next` path while more pages remain;
+ * keep requesting with an increasing offset until it's gone.
+ *
+ * @param {object} mk MusicKit instance
+ * @param {string} path API path, e.g. '/v1/me/library/playlists'
+ * @returns {Promise<Array<object>>} concatenated `data` items from all pages
+ */
+async function fetchAllPages(mk, path) {
+  const items = [];
+  let offset = 0;
+
+  while (true) {
+    const response = await mk.api.music(path, { limit: 100, offset });
+    const page = response.data;
+    items.push(...page.data);
+    if (!page.next || page.data.length === 0) break;
+    offset += page.data.length;
+  }
+
+  return items;
+}
+
+/**
  * Fetch the user's Apple Music library playlists.
  *
  * @returns {Promise<Array<{ id: string, name: string, image: string|null, trackCount: number }>>}
@@ -14,11 +39,9 @@ import { getMusicKit, initMusicKit } from './auth.js';
 export async function fetchMyPlaylists() {
   const mk = getMusicKit() || await initMusicKit();
 
-  const response = await mk.api.music('/v1/me/library/playlists', {
-    limit: 100,
-  });
+  const playlists = await fetchAllPages(mk, '/v1/me/library/playlists');
 
-  return response.data.data.map((p) => ({
+  return playlists.map((p) => ({
     id: p.id,
     name: p.attributes.name,
     image: p.attributes.artwork
@@ -37,11 +60,9 @@ export async function fetchMyPlaylists() {
 export async function fetchPlaylistTracks(playlistId) {
   const mk = getMusicKit() || await initMusicKit();
 
-  const response = await mk.api.music(`/v1/me/library/playlists/${playlistId}/tracks`, {
-    limit: 100,
-  });
+  const tracks = await fetchAllPages(mk, `/v1/me/library/playlists/${playlistId}/tracks`);
 
-  return response.data.data
+  return tracks
     .filter((t) => t.attributes)
     .map((t) => ({
       title: t.attributes.name,
