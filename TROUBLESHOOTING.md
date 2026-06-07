@@ -259,6 +259,97 @@ standalone binary for your OS from
 
 ---
 
+## YouTube: "Sign in to confirm you're not a bot"
+
+YouTube sometimes blocks a machine and demands proof you're a real person.
+It's common on VPNs, shared/college networks, or after heavy use. The fix is
+to let the app borrow your normal signed-in YouTube session, using "cookies"
+from a browser where you're already logged into YouTube.
+
+There are two ways. **Try Option A first — it's one line.** Only use Option B
+if A doesn't work.
+
+### Option A: let the app read your browser (easiest)
+
+1. Open your normal browser and make sure you're **signed in to youtube.com**.
+2. **Fully close that browser** — every window. (It locks its cookie file
+   while open, so the app can't read it.)
+3. Open the `.env` file in the project folder with Notepad. Add ONE line at
+   the bottom, matching the browser you use:
+
+   ```bash
+   YTDLP_COOKIES_FROM_BROWSER=chrome
+   ```
+
+   Replace `chrome` with whichever you use: `edge`, `firefox`, `brave`, or
+   `safari`. (Firefox is the only one you don't have to close.)
+4. Save the file and restart the app (close it and run `npm run dev` again).
+
+That's usually it. If YouTube still blocks you, do Option B.
+
+### Option B: export a cookies file (if A fails)
+
+Some Chrome/Edge versions encrypt their cookies so the app can't read them.
+In that case, export the cookies to a file yourself:
+
+1. In Chrome or Edge, install the extension **"Get cookies.txt LOCALLY"**
+   from the Chrome Web Store. (Make sure it says **LOCALLY** — the one
+   without it was pulled for being unsafe.)
+2. Go to **youtube.com** and make sure you're signed in.
+3. Click the extension icon → **Export** / **Download**. It saves a file
+   named `cookies.txt` (probably in your Downloads folder).
+4. In the project's `.env` file, add ONE line pointing at that file. Use the
+   **full path**, and on Windows use forward slashes `/`:
+
+   ```bash
+   YTDLP_COOKIES=C:/Users/TSM/Downloads/cookies.txt
+   ```
+
+5. Save and restart the app.
+
+> **One safety note:** these cookies are a key to your YouTube/Google account
+> while they're valid. The file and your `.env` never leave your computer —
+> the app doesn't upload them anywhere — but if you'd rather not risk your
+> main account, sign into a spare Google account in step 1 and use that one's
+> cookies instead.
+
+### Still blocked?
+
+Make sure yt-dlp itself is up to date — YouTube changes its defenses often and
+yt-dlp ships fixes quickly:
+
+```bash
+npm run setup              # re-fetches the latest yt-dlp
+./bin/yt-dlp --version     # Windows: .\bin\yt-dlp.exe --version
+```
+
+---
+
+## YouTube: "Requested format is not available"
+
+Different from the bot error above. Current yt-dlp has to run YouTube's player
+JavaScript to unlock the real audio formats; without a JavaScript runtime it
+falls back to a stripped result with no audio and fails with this message.
+
+The app handles this automatically by telling yt-dlp to use **Node** (which you
+already have — it's what runs the app), so a normal source checkout just works
+after `git pull`. You only need to act if you still see this error:
+
+- **Make sure Node is findable.** In the same terminal you run the app from:
+  ```bash
+  node --version            # should print v18+ — if "not recognized", reinstall Node
+  ```
+  Node must be on your `PATH` (it is if `npm run dev` works). If it lives
+  somewhere unusual, point yt-dlp straight at it by adding this to `.env`:
+  ```bash
+  # Windows example — use the full path to your node.exe, forward slashes
+  YTDLP_NODE_PATH=C:/Program Files/nodejs/node.exe
+  ```
+- **Or install Deno** (yt-dlp's built-in default) from <https://deno.com> if you
+  prefer not to rely on Node.
+
+---
+
 ## Spotify logs in but no playlists show
 
 Sometimes the first login glitches before playlists load. Stop the app and

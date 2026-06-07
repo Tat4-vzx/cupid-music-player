@@ -132,6 +132,43 @@ function getYtDlpPath() {
   return cachedYtDlpPath;
 }
 
+// Common yt-dlp args, applied to every yt-dlp call. Three levers:
+//
+//   1. js-runtime — current yt-dlp must run YouTube's player JS to solve the
+//      "n challenge" and see the full format list. Without a JS runtime it
+//      falls back to a stripped extraction with no m4a audio, failing with
+//      "Requested format is not available". Deno is yt-dlp's only default,
+//      and most users don't have it — but they DO have Node (it runs this
+//      app), so we enable Node explicitly. This is additive: machines that
+//      already have Deno keep using it. Override the binary with
+//      YTDLP_NODE_PATH if `node` isn't on PATH (e.g. some packaged installs).
+//   2. player_client — the default web client frequently trips the "Sign in
+//      to confirm you're not a bot" check. The `tv`/`web_safari` clients are
+//      rarely challenged and need no login, so we prefer them. Zero setup.
+//   3. cookies — when YouTube still demands a real session (common on
+//      datacenter/VPN IPs), pass a logged-in YouTube session. Opt-in via:
+//        YTDLP_COOKIES_FROM_BROWSER=chrome|firefox|edge|brave|safari
+//        YTDLP_COOKIES=/abs/path/to/cookies.txt   (Netscape cookie file)
+//      The browser form reads cookies straight from an installed browser
+//      where the user is signed in to YouTube.
+function ytDlpCommonArgs() {
+  const nodePath = process.env.YTDLP_NODE_PATH;
+  const args = [
+    '--js-runtimes', nodePath ? `node:${nodePath}` : 'node',
+    '--extractor-args', 'youtube:player_client=tv,web_safari,default',
+  ];
+
+  const browser = process.env.YTDLP_COOKIES_FROM_BROWSER;
+  const cookieFile = process.env.YTDLP_COOKIES;
+  if (browser) {
+    args.push('--cookies-from-browser', browser);
+  } else if (cookieFile) {
+    args.push('--cookies', cookieFile);
+  }
+
+  return args;
+}
+
 const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 
 // youtubei.js handles YT Music search (audio uploads, not music videos).
@@ -168,14 +205,23 @@ async function searchYouTubeMusic(title, artist) {
   return top.id;
 }
 
+// Solving YouTube's n-challenge spins up a JS runtime (Node) and querying
+// multiple player clients adds round trips, so a cold extraction now runs
+// ~15-20s on a fast machine and longer on slower/Windows boxes. The old 15s
+// ceiling killed these mid-run — execFile reports a bare "Command failed",
+// which surfaces in the renderer as net::ERR_FAILED. Give extraction generous
+// headroom; it's a ceiling, not a typical wait (prefetch warms most tracks).
+const YTDLP_EXTRACT_TIMEOUT = 90000;
+
 async function ytDlpExtract(target) {
   const { stdout } = await execFileAsync(getYtDlpPath(), [
     target,
     '-f', 'bestaudio[ext=m4a]/bestaudio',
     '--no-playlist',
     '--no-warnings',
+    ...ytDlpCommonArgs(),
     '-g',
-  ], { timeout: 15000 });
+  ], { timeout: YTDLP_EXTRACT_TIMEOUT });
   return stdout.trim();
 }
 
@@ -185,9 +231,10 @@ async function ytDlpSearch(title, artist) {
     '-f', 'bestaudio[ext=m4a]/bestaudio',
     '--no-playlist',
     '--no-warnings',
+    ...ytDlpCommonArgs(),
     '--print', '%(id)s',
     '-g',
-  ], { timeout: 15000 });
+  ], { timeout: YTDLP_EXTRACT_TIMEOUT });
   const lines = stdout.trim().split('\n').map((l) => l.trim()).filter(Boolean);
   const id = lines.find((l) => YT_ID_RE.test(l));
   const url = lines.find((l) => l.startsWith('http'));
@@ -279,7 +326,8 @@ async function fetchYouTubePlaylistViaYtDlp(url) {
     '--flat-playlist',
     '--dump-single-json',
     '--no-warnings',
-  ], { timeout: 30000, maxBuffer: 50 * 1024 * 1024 });
+    ...ytDlpCommonArgs(),
+  ], { timeout: 60000, maxBuffer: 50 * 1024 * 1024 });
 
   const data = JSON.parse(stdout);
   const entries = data.entries || [];
