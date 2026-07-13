@@ -1,3 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Fredoka:wght@300..700&display=swap');
+
 @font-face {
   font-family: 'Rainyhearts';
   src: url('../font/rainyhearts.ttf') format('truetype');
@@ -6,8 +12,8 @@
 }
 
 :root {
-  font-family: 'Rainyhearts', monospace;
-  color-scheme: dark;
+  font-family: 'Outfit', sans-serif;
+  color-scheme: light;
 }
 
 html,
@@ -15,10 +21,33 @@ body,
 #root {
   margin: 0;
   padding: 0;
-  overflow: hidden;
-  background: transparent;
+  min-height: 100vh;
+  background-color: #FFF0F5; /* Lavender Blush - Rosa super suave */
+  color: #4A3E4D; /* Roxo acinzentado escuro para contraste suave */
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
-* {
-  box-sizing: border-box;
+/* Garantir rolagem suave no Safari iOS */
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Scrollbar fofa personalizada */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FFE4E1; /* Misty Rose */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #F472B6; /* Rosa pastel escuro */
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #EC4899; /* Rosa mais vibrante */
 }

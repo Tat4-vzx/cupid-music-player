@@ -1,168 +1,29 @@
-import { useCallback, useRef, useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Heart,
+  Music,
+  Image as ImageIcon,
+  Play,
+  Pause,
+  SkipForward,
+  SkipBack,
+  Volume2,
+  VolumeX,
+  Plus,
+  Trash2,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Repeat,
+  Shuffle,
+  Calendar,
+  Sparkles
+} from 'lucide-react';
 import './App.css';
 import useAudioPlayer from './useAudioPlayer';
-import useSpotifyPlayer from './useSpotifyPlayer';
-import useTheme from './useTheme';
-import { login as spotifyLogin, handleCallback, isLoggedIn as isSpotifyLoggedIn, logout as spotifyLogout } from './spotify/auth.js';
-import { fetchPlaylistTracks as fetchSpotifyTracks, fetchMyPlaylists as fetchSpotifyPlaylists } from './spotify/api.js';
-import { login as appleLogin, logout as appleLogout, isLoggedIn as isAppleLoggedIn, initMusicKit } from './apple/auth.js';
-import { fetchMyPlaylists as fetchApplePlaylists, fetchPlaylistTracks as fetchAppleTracks } from './apple/api.js';
-import {
-  login as youtubeLogin,
-  logout as youtubeLogout,
-  isLoggedIn as isYouTubeLoggedIn,
-  isConfigured as isYouTubeConfigured,
-  cancelLogin as cancelYouTubeLogin,
-} from './youtube/auth.js';
-import {
-  parsePlaylistUrl as parseYouTubePlaylistUrl,
-  fetchPlaylistByUrl as fetchYouTubePlaylistByUrl,
-  fetchMyPlaylists as fetchYouTubePlaylists,
-  fetchPlaylistTracks as fetchYouTubeTracks,
-} from './youtube/api.js';
+import { getPhotos, addPhoto, deletePhoto } from './photoDb';
 
-import progressBarStars from '../assets/progress_bar_stars.png';
-import star from '../assets/star.png';
-import starSelected from '../assets/star_selected.png';
-
-function useResize(corner) {
-  const onMouseDown = useCallback((e) => {
-    e.preventDefault();
-    let lastX = e.screenX;
-    let lastY = e.screenY;
-
-    const onMouseMove = (e) => {
-      const dx = e.screenX - lastX;
-      const dy = e.screenY - lastY;
-      lastX = e.screenX;
-      lastY = e.screenY;
-      window.cupid?.resize({ dx, dy, corner });
-    };
-
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-  }, [corner]);
-
-  return onMouseDown;
-}
-
-function formatTime(seconds) {
-  if (!seconds || !isFinite(seconds) || seconds < 0) return '0:00';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function SettingsDropdown({ value, options, onChange }) {
-  const [open, setOpen] = useState(false);
-  const [menuRect, setMenuRect] = useState(null);
-  const triggerRef = useRef(null);
-  const menuRef = useRef(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const updateRect = () => {
-      const r = triggerRef.current?.getBoundingClientRect();
-      if (r) setMenuRect({ top: r.bottom, left: r.left, width: r.width });
-    };
-    updateRect();
-
-    const onMouseDown = (e) => {
-      if (!triggerRef.current?.contains(e.target) && !menuRef.current?.contains(e.target)) {
-        setOpen(false);
-      }
-    };
-    const onKey = (e) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKey);
-    window.addEventListener('resize', updateRect);
-    // Close on scroll anywhere — positions become stale fast
-    window.addEventListener('scroll', () => setOpen(false), true);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKey);
-      window.removeEventListener('resize', updateRect);
-    };
-  }, [open]);
-
-  const current = options.find((o) => o.value === value);
-
-  return (
-    <div className={`settings-dropdown ${open ? 'open' : ''}`}>
-      <button
-        ref={triggerRef}
-        type="button"
-        className="settings-dropdown-trigger"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span>{current?.label ?? value}</span>
-        <span className="settings-dropdown-chevron" aria-hidden="true">▾</span>
-      </button>
-      {open && menuRect && createPortal(
-        <div
-          ref={menuRef}
-          className="settings-dropdown-menu"
-          role="listbox"
-          style={{
-            position: 'fixed',
-            top: `${menuRect.top + 2}px`,
-            left: `${menuRect.left}px`,
-            width: `${menuRect.width}px`,
-          }}
-        >
-          {options.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              role="option"
-              aria-selected={o.value === value}
-              className={`settings-dropdown-item ${o.value === value ? 'active' : ''}`}
-              onClick={() => { onChange(o.value); setOpen(false); }}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>,
-        // Portal to .player so CSS custom properties (--color-primary, etc.)
-        // and the theme class still cascade. document.body would orphan them.
-        document.querySelector('.player') ?? document.body,
-      )}
-    </div>
-  );
-}
-
-function PlaylistList({ loading, playlists, loadingPlaylist, onSelect, emptyMessage = 'no playlists found' }) {
-  return (
-    <div className="settings-playlist-list">
-      {loading ? (
-        <div className="settings-label">loading...</div>
-      ) : playlists.length === 0 ? (
-        <div className="settings-label">{emptyMessage}</div>
-      ) : (
-        playlists.map((p) => (
-          <button
-            key={p.id}
-            className={`settings-playlist-item ${loadingPlaylist ? 'disabled' : ''}`}
-            onClick={() => onSelect(p.id)}
-            disabled={loadingPlaylist}
-          >
-            {p.name}
-          </button>
-        ))
-      )}
-    </div>
-  );
-}
-
+// Componente para Rolagem de Texto (Marquee)
 function MarqueeText({ className, text }) {
   const outerRef = useRef(null);
   const textRef = useRef(null);
@@ -176,66 +37,90 @@ function MarqueeText({ className, text }) {
   }, [text]);
 
   return (
-    <div className={`${className} marquee-container`} ref={outerRef}>
-      {/* Hidden span to measure true text width */}
-      <span ref={textRef} className="marquee-measure">{text}</span>
-      <span className={shouldScroll ? 'marquee-scroll' : ''}>
-        {text}
-        {shouldScroll && <span className="marquee-gap">{text}</span>}
-      </span>
+    <div className={`${className} overflow-hidden whitespace-nowrap relative w-full`} ref={outerRef}>
+      <span ref={textRef} className="inline-block invisible absolute">{text}</span>
+      <div className={`inline-block ${shouldScroll ? 'animate-marquee' : ''}`}>
+        <span className="pr-4">{text}</span>
+        {shouldScroll && <span className="pr-4">{text}</span>}
+      </div>
     </div>
   );
 }
 
 export default function App() {
-  // ── Source state ─────────────────────────────────────────
-  const [source, setSource] = useState('local'); // 'local' | 'streaming'
-  const [spotifyConnected, setSpotifyConnected] = useState(isSpotifyLoggedIn());
-  const [appleConnected, setAppleConnected] = useState(isAppleLoggedIn());
-  const [youtubeConnected, setYoutubeConnected] = useState(isYouTubeLoggedIn());
-  const [youtubeLoggingIn, setYoutubeLoggingIn] = useState(false);
-  const [youtubeUrlInput, setYoutubeUrlInput] = useState('');
-  const [streamTracks, setStreamTracks] = useState([]);
-  const [spotifyPlaylists, setSpotifyPlaylists] = useState([]);
-  const [applePlaylists, setApplePlaylists] = useState([]);
-  const [youtubePlaylists, setYoutubePlaylists] = useState([]);
-  const [loadingPlaylists, setLoadingPlaylists] = useState(false);
-  const [loadingPlaylist, setLoadingPlaylist] = useState(false);
-  const [settingsError, setSettingsError] = useState(null);
-  const [musicService, setMusicService] = useState(() => {
-    try {
-      const stored = localStorage.getItem('cupid-player-music-service');
-      if (stored === 'spotify' || stored === 'apple' || stored === 'youtube' || stored === 'local') return stored;
-    } catch {
-      // ignore
-    }
-    return 'local';
-  }); // 'spotify' | 'apple' | 'youtube' | 'local'
-  const [playMode, setPlayMode] = useState('normal'); // 'normal' | 'shuffle' | 'repeat'
-  const [volumeHovered, setVolumeHovered] = useState(false);
-  const [volumeDragging, setVolumeDragging] = useState(false);
-  const volumeBarRef = useRef(null);
-  const [showDebug] = useState(false);
-  const [localTracks, setLocalTracks] = useState([]);
+  const [activeTab, setActiveTab] = useState('musica'); // 'musica' | 'fotos'
+  const [tracks, setTracks] = useState([]);
+  const [defaultPhotos, setDefaultPhotos] = useState([]);
+  const [dbPhotos, setDbPhotos] = useState([]);
+  const [loadingTracks, setLoadingTracks] = useState(true);
+  const [loadingPhotos, setLoadingPhotos] = useState(true);
 
-  const loadLocalPlaylist = useCallback(async () => {
-    if (!window.cupid?.getLocalPlaylist) return;
+  // Estados do Player
+  const [playMode, setPlayMode] = useState('normal'); // 'normal' | 'shuffle' | 'repeat'
+  
+  // Modal de Fotos
+  const [activePhotoIndex, setActivePhotoIndex] = useState(null);
+
+  // Gestos de toque (Swipe) para o modal de fotos
+  const [touchStart, setTouchStart] = useState(null);
+  const [touchEnd, setTouchEnd] = useState(null);
+
+  // Carrega fotos locais do IndexedDB
+  const loadDbPhotos = useCallback(async () => {
     try {
-      const tracks = await window.cupid.getLocalPlaylist();
-      setLocalTracks(Array.isArray(tracks) ? tracks : []);
+      const savedPhotos = await getPhotos();
+      setDbPhotos(savedPhotos);
     } catch (err) {
-      console.error('Failed to load local playlist:', err);
+      console.error('Erro ao carregar fotos do IndexedDB:', err);
     }
   }, []);
 
-  useEffect(() => { loadLocalPlaylist(); }, [loadLocalPlaylist]);
+  // Busca dados iniciais (músicas, fotos padrão e IndexedDB)
+  useEffect(() => {
+    // Carregar playlist local
+    fetch('./music/playlist.json')
+      .then((res) => {
+        if (!res.ok) throw new Error('Falha ao carregar playlist.json');
+        return res.json();
+      })
+      .then((data) => {
+        setTracks(data);
+        setLoadingTracks(false);
+      })
+      .catch((err) => {
+        console.error('Erro ao carregar playlist.json:', err);
+        setLoadingTracks(false);
+      });
 
-  const local = useAudioPlayer(localTracks, playMode, window.cupid?.getLocalAudioPath);
-  const streaming = useSpotifyPlayer(streamTracks, playMode);
-  const player = source === 'streaming' ? streaming : local;
+    // Carregar fotos padrão
+    fetch('./photos/photos.json')
+      .then((res) => {
+        if (!res.ok) throw new Error('Falha ao carregar photos.json');
+        return res.json();
+      })
+      .then((data) => {
+        // Mapear fotos padrão com um ID identificável
+        const mapped = data.map((item, idx) => ({
+          ...item,
+          id: `default-${idx}`,
+          isDefault: true
+        }));
+        setDefaultPhotos(mapped);
+        setLoadingPhotos(false);
+      })
+      .catch((err) => {
+        console.error('Erro ao carregar photos.json:', err);
+        setLoadingPhotos(false);
+      });
 
+    loadDbPhotos();
+  }, [loadDbPhotos]);
+
+  // Hook do Player de Música
   const {
     track,
+    trackIndex,
+    setTrackIndex,
     isPlaying,
     progress,
     duration,
@@ -248,649 +133,638 @@ export default function App() {
     setVolume,
     muted,
     toggleMute,
-  } = player;
+  } = useAudioPlayer(tracks, playMode);
 
-  const cyclePlayMode = useCallback(() => {
-    setPlayMode((m) => m === 'normal' ? 'shuffle' : m === 'shuffle' ? 'repeat' : 'normal');
-  }, []);
+  // Configuração da API Media Session
+  useEffect(() => {
+    if (!track || track.title === 'No track') return;
 
-  // ── Fetch Spotify playlists ────────────────────────────
-  const loadSpotifyPlaylists = useCallback((silent = false) => {
-    setLoadingPlaylists(true);
-    if (!silent) setSettingsError(null);
-    fetchSpotifyPlaylists()
-      .then((p) => { setSpotifyPlaylists(p); setSettingsError(null); })
-      .catch((err) => { if (!silent) setSettingsError(err.message); })
-      .finally(() => setLoadingPlaylists(false));
-  }, []);
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: track.title,
+        artist: track.artist,
+        album: track.album || 'Presente da Lívia 🌸',
+        artwork: [
+          {
+            src: track.art || 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=300',
+            sizes: '96x96',
+            type: 'image/jpeg'
+          },
+          {
+            src: track.art || 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=512',
+            sizes: '512x512',
+            type: 'image/jpeg'
+          }
+        ]
+      });
 
-  // ── Fetch Apple Music playlists ────────────────────────
-  const loadApplePlaylists = useCallback((silent = false) => {
-    setLoadingPlaylists(true);
-    if (!silent) setSettingsError(null);
-    fetchApplePlaylists()
-      .then((p) => { setApplePlaylists(p); setSettingsError(null); })
-      .catch((err) => { if (!silent) setSettingsError(err.message); })
-      .finally(() => setLoadingPlaylists(false));
-  }, []);
+      navigator.mediaSession.setActionHandler('play', togglePlay);
+      navigator.mediaSession.setActionHandler('pause', togglePlay);
+      navigator.mediaSession.setActionHandler('previoustrack', prev);
+      navigator.mediaSession.setActionHandler('nexttrack', next);
+    }
+  }, [track, togglePlay, prev, next]);
 
-  // ── Fetch YouTube playlists (Data API, requires sign-in) ─
-  const loadYoutubePlaylists = useCallback((silent = false) => {
-    setLoadingPlaylists(true);
-    if (!silent) setSettingsError(null);
-    fetchYouTubePlaylists()
-      .then((p) => { setYoutubePlaylists(p); setSettingsError(null); })
-      .catch((err) => { if (!silent) setSettingsError(err.message); })
-      .finally(() => setLoadingPlaylists(false));
-  }, []);
+  // Sincronizar estado de reprodução na Media Session
+  useEffect(() => {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+    }
+  }, [isPlaying]);
 
-  // ── Load a playlist from a YouTube URL (no sign-in) ─────
-  const loadYoutubePlaylistFromUrl = useCallback(async (rawInput) => {
-    setSettingsError(null);
-    const parsed = parseYouTubePlaylistUrl(rawInput);
-    if (!parsed) {
-      setSettingsError('Not a recognised YouTube playlist URL');
+  // Alterna o modo de reprodução (normal, shuffle, repeat)
+  const cyclePlayMode = () => {
+    setPlayMode((prevMode) => {
+      if (prevMode === 'normal') return 'shuffle';
+      if (prevMode === 'shuffle') return 'repeat';
+      return 'normal';
+    });
+  };
+
+  // Junta as fotos do banco local com as padrão
+  const allPhotos = [...dbPhotos, ...defaultPhotos];
+
+  // Upload de Foto
+  const handlePhotoUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Verificar se é imagem
+    if (!file.type.startsWith('image/')) {
+      alert('Por favor, selecione um arquivo de imagem válido.');
       return;
     }
-    setLoadingPlaylist(true);
-    try {
-      const tracks = await fetchYouTubePlaylistByUrl(rawInput);
-      if (tracks.length === 0) {
-        setSettingsError('Playlist is empty or private');
-        return;
-      }
-      setStreamTracks(tracks);
-      setSource('streaming');
-      setYoutubeUrlInput('');
-    } catch (err) {
-      setSettingsError(err.message);
-    } finally {
-      setLoadingPlaylist(false);
-    }
-  }, []);
 
-  // ── Handle Spotify OAuth callback on mount ─────────────
-  useEffect(() => {
-    async function checkCallback() {
-      const params = new URLSearchParams(window.location.search);
-      if (params.has('code')) {
-        try {
-          await handleCallback();
-          setSpotifyConnected(true);
-          // Small delay to let token settle before fetching
-          setTimeout(() => loadSpotifyPlaylists(true), 500);
-        } catch (err) {
-          setSettingsError(err.message);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const base64Url = event.target.result;
+        const newPhoto = {
+          id: `db-${Date.now()}`,
+          url: base64Url,
+          caption: 'Foto adicionada via upload! 💖',
+          date: Date.now(),
+          isDefault: false
+        };
+        await addPhoto(newPhoto);
+        await loadDbPhotos();
+      } catch (err) {
+        console.error('Erro ao salvar foto:', err);
+        alert('Não foi possível salvar a foto localmente.');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Excluir foto adicionada pelo usuário
+  const handleDeletePhoto = async (photoId, e) => {
+    e.stopPropagation();
+    if (window.confirm('Tem certeza que deseja excluir esta foto de suas memórias?')) {
+      try {
+        await deletePhoto(photoId);
+        await loadDbPhotos();
+        if (activePhotoIndex !== null) {
+          setActivePhotoIndex(null);
         }
-      } else {
-        if (isSpotifyLoggedIn()) loadSpotifyPlaylists(true);
-        if (isAppleLoggedIn()) loadApplePlaylists(true);
-        if (isYouTubeLoggedIn()) loadYoutubePlaylists(true);
+      } catch (err) {
+        console.error('Erro ao excluir foto:', err);
       }
     }
-    checkCallback();
-  }, []);
+  };
 
-  // ── Load a playlist by ID (works for all services) ────
-  const loadPlaylist = useCallback(async (id, service) => {
-    setLoadingPlaylist(true);
-    setSettingsError(null);
-    try {
-      const fetcher = service === 'apple'
-        ? fetchAppleTracks
-        : service === 'youtube'
-          ? fetchYouTubeTracks
-          : fetchSpotifyTracks;
-      const tracks = await fetcher(id);
-      if (tracks.length === 0) {
-        setSettingsError('Playlist is empty');
-        return;
-      }
-      setStreamTracks(tracks);
-      setSource('streaming');
-    } catch (err) {
-      setSettingsError(err.message);
-    } finally {
-      setLoadingPlaylist(false);
+  // Navegação no Modal de Fotos
+  const handlePrevPhoto = () => {
+    if (allPhotos.length === 0) return;
+    setActivePhotoIndex((prevIdx) => (prevIdx - 1 + allPhotos.length) % allPhotos.length);
+  };
+
+  const handleNextPhoto = () => {
+    if (allPhotos.length === 0) return;
+    setActivePhotoIndex((prevIdx) => (prevIdx + 1) % allPhotos.length);
+  };
+
+  // Handlers para gestos de toque no iPhone (Swipe)
+  const handleTouchStart = (e) => {
+    setTouchStart(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchMove = (e) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > 60; // Deslizar para a esquerda -> Próxima
+    const isRightSwipe = distance < -60; // Deslizar para a direita -> Anterior
+
+    if (isLeftSwipe) {
+      handleNextPhoto();
+    } else if (isRightSwipe) {
+      handlePrevPhoto();
     }
-  }, []);
+    setTouchStart(null);
+    setTouchEnd(null);
+  };
 
-  const { theme, toggleTheme, assets } = useTheme();
-
-  const [recordFrame, setRecordFrame] = useState(0);
-  const [needleFrame, setNeedleFrame] = useState(0);
-  const [isPink, setIsPink] = useState(theme === 'pink');
-  const [swapping, setSwapping] = useState(false);
-  const [needleLifted, setNeedleLifted] = useState(false);
-  const [starHovered, setStarHovered] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [dragging, setDragging] = useState(false);
-  const [hoverProgress, setHoverProgress] = useState(null);
-  const seekRef = useRef(null);
-
-  useEffect(() => {
-    if (!dragging) return;
-    const onMouseMove = (e) => {
-      const rect = seekRef.current.getBoundingClientRect();
-      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      setHoverProgress(pct);
-      seek(pct);
-    };
-    const onMouseUp = () => {
-      setDragging(false);
-      setStarHovered(false);
-      setHoverProgress(null);
-    };
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-  }, [dragging, seek]);
-
-  useEffect(() => {
-    if (!volumeDragging) return;
-    const onMouseMove = (e) => {
-      if (!volumeBarRef.current) return;
-      const rect = volumeBarRef.current.getBoundingClientRect();
-      const pct = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
-      setVolume(pct);
-    };
-    const onMouseUp = () => {
-      setVolumeDragging(false);
-      setVolumeHovered(false);
-    };
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-  }, [volumeDragging, setVolume]);
-  const [needleChangeFrame, setNeedleChangeFrame] = useState(0);
-  // null sentinel = haven't seen any track yet; 'No track' = placeholder while
-  // tracks load async. Both should silently set the ref without animating.
-  const prevTrackRef = useRef(null);
-
-  const currentFrames = isPink ? assets.recordFramesA : assets.recordFramesB;
-  const incomingFrames = isPink ? assets.recordFramesB : assets.recordFramesA;
-
-  // Spin animation while playing
-  useEffect(() => {
-    if (!isPlaying || swapping) return;
-    const interval = setInterval(() => {
-      setRecordFrame((f) => (f + 1) % currentFrames.length);
-      setNeedleFrame((f) => (f + 1) % assets.needlePlayFrames.length);
-    }, 400);
-    return () => clearInterval(interval);
-  }, [isPlaying, swapping, currentFrames.length]);
-
-  // Detect song change and trigger swap
-  // Sequence: needle lifts (0→1→2) → records swap → needle lowers (2→1→0)
-  useEffect(() => {
-    if (prevTrackRef.current === track.title) return;
-    const wasInitialOrPlaceholder = prevTrackRef.current === null || prevTrackRef.current === 'No track';
-    prevTrackRef.current = track.title;
-    if (track.title === 'No track') return;
-    if (wasInitialOrPlaceholder) return;
-    if (needleLifted) return;
-
-    setNeedleLifted(true);
-    setNeedleChangeFrame(0);
-
-    // Show needle lifted (frame 1 = index 1)
-    setTimeout(() => setNeedleChangeFrame(1), 200);
-
-    // Start record swap
-    setTimeout(() => setSwapping(true), 400);
-
-    // Finish swap, switch color
-    setTimeout(() => {
-      setIsPink((p) => !p);
-      setRecordFrame(0);
-      setSwapping(false);
-    }, 1000);
-
-    // Needle lower after swap is done, reset to frame 1
-    setTimeout(() => {
-      setNeedleChangeFrame(0);
-      setNeedleLifted(false);
-      setNeedleFrame(0);
-    }, 1100);
-
-  }, [track.title, needleLifted]);
-
-  const resizeTL = useResize('top-left');
-  const resizeTR = useResize('top-right');
-  const resizeBL = useResize('bottom-left');
-  const resizeBR = useResize('bottom-right');
+  // Formatar tempo (segundos em mm:ss)
+  const formatTime = (seconds) => {
+    if (!seconds || !isFinite(seconds) || seconds < 0) return '0:00';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
 
   return (
-    <div className={`player ${theme === 'blue' ? 'theme-blue' : ''}`}>
-      {/* Base frame */}
-      <img src={assets.frame} className="layer" alt="" draggable={false} />
-
-      {/* Window title */}
-      <div className="window-title">cupid player</div>
-
-      {/* Record player centered in frame */}
-      <img src={assets.recordPlayer} className="record-player" alt="" draggable={false} />
-      <img
-        src={currentFrames[recordFrame]}
-        className={`record-player ${swapping ? 'record-slide-out' : ''}`}
-        alt=""
-        draggable={false}
-      />
-      {swapping && (
-        <img
-          src={incomingFrames[0]}
-          className="record-player record-slide-in"
-          alt=""
-          draggable={false}
-        />
-      )}
-      <img
-        src={needleLifted ? assets.needleChangeFrames[needleChangeFrame] : assets.needlePlayFrames[needleFrame]}
-        className="record-player"
-        alt=""
-        draggable={false}
-      />
-
-      {/* Frame overlay (no background) to clip sliding records */}
-      <img src={assets.frameNoBg} className="layer frame-overlay" alt="" draggable={false} />
-
-      {/* Decorative */}
-      <img src={assets.plant} className="layer layer-ui" alt="" draggable={false} />
-
-      {/* Progress bar layers */}
-      <img src={assets.progressBar} className="layer layer-ui" alt="" draggable={false} />
-      <img
-        src={progressBarStars}
-        className="layer layer-ui"
-        alt=""
-        draggable={false}
-        style={{
-          clipPath: `inset(0 ${(1 - (131 + (hoverProgress ?? progress) * 226 + 10) / 512) * 100}% 0 0)`,
-        }}
-      />
-      <img
-        src={starHovered ? starSelected : star}
-        className={`layer layer-ui star-indicator ${starHovered ? 'star-hovered' : ''}`}
-        alt=""
-        draggable={false}
-        style={{
-          transform: `translateX(calc(-3 / 306 * 100vw + ${(hoverProgress ?? progress) * (226 / 512) * 171.9}vw))`,
-        }}
-      />
-
-      {/* Playback control layers (visual only) */}
-      <img src={assets.backwardsButton} className="layer layer-ui" alt="" draggable={false} />
-      <img src={isPlaying ? assets.pauseButton : assets.playButton} className="layer layer-ui" alt="" draggable={false} />
-      <img src={assets.forwardsButton} className="layer layer-ui" alt="" draggable={false} />
-
-      {/* Volume/mute button layer */}
-      <img
-        src={muted ? assets.muteButton : assets.volumeButton}
-        className="layer layer-ui"
-        alt=""
-        draggable={false}
-        style={{ opacity: 0.8 }}
-      />
-
-      {/* Shuffle/repeat button layer */}
-      <img
-        src={playMode === 'repeat' ? assets.repeatButton : assets.shuffleButton}
-        className="layer layer-ui"
-        alt=""
-        draggable={false}
-        style={{ opacity: playMode === 'normal' ? 0.4 : 0.8 }}
-      />
-
-      {/* Window control layers (visual only) */}
-      <img src={assets.minimizerButton} className="layer layer-ui" alt="" draggable={false} />
-      <img src={assets.windowButton} className="layer layer-ui" alt="" draggable={false} />
-      <img src={assets.exitButton} className="layer layer-ui" alt="" draggable={false} />
-
-      {/* Settings button layer */}
-      <img src={assets.settings} className="layer layer-ui settings-layer" alt="" draggable={false} />
-
-      {/* SVG clip-path for pixel-art album mask */}
-      <svg width="0" height="0" style={{ position: 'absolute' }}>
-        <defs>
-          <clipPath id="album-mask" clipPathUnits="objectBoundingBox">
-            {/* 35x41 centered vertically */}
-            <rect x="0.07317" y="0" width="0.85366" height="1" />
-            {/* 37x39 */}
-            <rect x="0.04878" y="0.02439" width="0.90244" height="0.95122" />
-            {/* 39x37 */}
-            <rect x="0.02439" y="0.04878" width="0.95122" height="0.90244" />
-            {/* 41x35 */}
-            <rect x="0" y="0.07317" width="1" height="0.85366" />
-          </clipPath>
-        </defs>
-      </svg>
-
-      {/* Album art clipped to pixel mask */}
-      {track.art && (
-        <div className="album-mask">
-          <img src={track.art} className="album-art" alt="" draggable={false} />
+    <div className="flex flex-col min-h-screen bg-gradient-to-b from-[#FFF5F7] via-[#FFF0F3] to-[#FFE4E8]">
+      
+      {/* Cabeçalho Festivo do Presente */}
+      <header className="pt-8 pb-4 text-center px-4 relative overflow-hidden">
+        <div className="absolute -top-12 -left-12 w-32 h-32 bg-pink-200/30 rounded-full blur-2xl"></div>
+        <div className="absolute -top-12 -right-12 w-32 h-32 bg-rose-200/30 rounded-full blur-2xl"></div>
+        
+        <div className="inline-flex items-center gap-2 px-3 py-1 bg-pink-100 text-pink-600 rounded-full text-xs font-semibold tracking-wider uppercase mb-2 animate-bounce">
+          <Sparkles className="w-3.5 h-3.5" />
+          Para a minha irmã Lívia 🌸
         </div>
-      )}
+        
+        <h1 className="text-3xl md:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-600 to-rose-500 font-['Fredoka'] drop-shadow-sm">
+          Lívia's Cozy Space
+        </h1>
+        <p className="text-pink-500/80 text-xs md:text-sm mt-1 max-w-sm mx-auto font-medium">
+          Músicas preferidas e memórias lindas guardadas com amor. 🎂💖
+        </p>
+      </header>
 
-      {/* Album frame overlay */}
-      <img src={assets.albumFrame} className="layer album-frame-layer" alt="" draggable={false} />
+      {/* Conteúdo Principal com Layout Responsivo */}
+      <main className="flex-1 max-w-5xl w-full mx-auto px-4 pb-28">
+        
+        {/* Aba do Player de Música */}
+        {activeTab === 'musica' && (
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start mt-2">
+            
+            {/* Lado Esquerdo: Player de Música */}
+            <div className="md:col-span-6 bg-white/80 backdrop-blur-md rounded-3xl p-6 shadow-md border border-pink-100/50 flex flex-col items-center">
+              
+              {/* Vinil Giratório Decorativo */}
+              <div className="relative my-4 flex items-center justify-center">
+                
+                {/* Agulha do toca-discos */}
+                <div 
+                  className={`absolute top-0 right-10 w-16 h-24 origin-top-right z-10 transition-transform duration-500 pointer-events-none`}
+                  style={{
+                    transform: isPlaying ? 'rotate(15deg)' : 'rotate(-15deg)',
+                    transformOrigin: '90% 10%'
+                  }}
+                >
+                  <svg viewBox="0 0 100 200" className="w-full h-full drop-shadow-md">
+                    <path d="M90 10 L60 20 L40 100 L35 150" fill="none" stroke="#D1D5DB" strokeWidth="6" strokeLinecap="round" />
+                    <circle cx="90" cy="10" r="10" fill="#9CA3AF" />
+                    <rect x="25" y="145" width="20" height="25" rx="3" fill="#F472B6" />
+                  </svg>
+                </div>
 
-      {/* Now playing section */}
-      <div className="now-playing">
-        <div className="track-info">
-          <div className="now-playing-label">
-            now playing...
-          </div>
-          <MarqueeText className="track-title" text={track.title} />
-          <div className="track-artist">by {track.artist}</div>
-        </div>
-      </div>
+                {/* Corpo do Disco (Vinyl) */}
+                <div 
+                  className={`relative w-56 h-56 md:w-64 md:h-64 rounded-full bg-neutral-900 border-8 border-pink-100 flex items-center justify-center shadow-lg transition-transform`}
+                  style={{ 
+                    animation: isPlaying ? 'spin 12s linear infinite' : 'none'
+                  }}
+                >
+                  {/* Sulcos do disco */}
+                  <div className="absolute inset-4 rounded-full border border-neutral-800 border-dashed opacity-40"></div>
+                  <div className="absolute inset-8 rounded-full border border-neutral-800 border-dashed opacity-40"></div>
+                  <div className="absolute inset-12 rounded-full border border-neutral-800 border-dashed opacity-40"></div>
+                  <div className="absolute inset-16 rounded-full border border-neutral-800 border-dashed opacity-40"></div>
+                  
+                  {/* Foto de Capa no Centro */}
+                  <div className="w-20 h-20 md:w-24 md:h-24 rounded-full bg-pink-50 overflow-hidden border-4 border-neutral-900 flex items-center justify-center">
+                    <img 
+                      src={track.art || 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=150'} 
+                      alt="Capa do Álbum" 
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.target.src = 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=150';
+                      }}
+                    />
+                  </div>
+                  {/* Furo central do vinil */}
+                  <div className="absolute w-3.5 h-3.5 rounded-full bg-[#FFF5F7] border border-neutral-900"></div>
+                </div>
 
-      {/* Time display */}
-      <div className="time-display">
-        <span className="time-current">{formatTime(currentTime)}</span>
-        <span className="time-remaining">{formatTime(duration - currentTime)}</span>
-      </div>
+                {/* Sombra decorativa pulsante */}
+                <div className={`absolute inset-0 rounded-full bg-pink-300/20 -z-10 transition-transform duration-1000 ${isPlaying ? 'scale-105 blur-md animate-pulse' : 'scale-100'}`}></div>
+              </div>
 
-      {/* Drag region for moving the window */}
-      <div className="drag-region" />
+              {/* Informações da Música Ativa */}
+              <div className="text-center w-full mt-4 px-2">
+                <MarqueeText 
+                  className="text-lg md:text-xl font-bold text-gray-800 font-['Fredoka']" 
+                  text={track.title || 'Selecione uma música'} 
+                />
+                <p className="text-pink-500 text-sm font-semibold mt-0.5">
+                  {track.artist || 'Nenhuma faixa selecionada'}
+                </p>
+                {track.album && (
+                  <p className="text-gray-400 text-xs mt-0.5 italic">
+                    Álbum: {track.album}
+                  </p>
+                )}
+              </div>
 
-      {/* Custom resize handles at frame corners */}
-      <div className="resize-handle top-left" onMouseDown={resizeTL} />
-      <div className="resize-handle top-right" onMouseDown={resizeTR} />
-      <div className="resize-handle bottom-left" onMouseDown={resizeBL} />
-      <div className="resize-handle bottom-right" onMouseDown={resizeBR} />
+              {/* Controle do Progresso */}
+              <div className="w-full mt-6">
+                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                  <span>{formatTime(currentTime)}</span>
+                  <span>{formatTime(duration - currentTime)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.001"
+                  value={progress || 0}
+                  onChange={(e) => seek(parseFloat(e.target.value))}
+                  className="w-full h-1.5 bg-pink-100 rounded-lg appearance-none cursor-pointer accent-pink-500 focus:outline-none"
+                  style={{
+                    background: `linear-gradient(to right, #F472B6 0%, #F472B6 ${progress * 100}%, #FEE2E2 ${progress * 100}%, #FEE2E2 100%)`
+                  }}
+                />
+              </div>
 
-      {/* Progress bar seek target */}
-      <div
-        className="progress-seek"
-        ref={seekRef}
-        onMouseEnter={() => setStarHovered(true)}
-        onMouseLeave={() => { if (!dragging) { setStarHovered(false); } }}
-        onMouseDown={(e) => {
-          e.preventDefault();
-          setDragging(true);
-          const rect = e.currentTarget.getBoundingClientRect();
-          const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-          setHoverProgress(pct);
-          seek(pct);
-        }}
-      />
+              {/* Botões de Controle Clássicos */}
+              <div className="flex items-center gap-6 mt-6">
+                <button
+                  onClick={cyclePlayMode}
+                  title={`Modo de Reprodução: ${playMode}`}
+                  className={`p-2 rounded-full transition-colors ${
+                    playMode !== 'normal' ? 'text-pink-500 bg-pink-50' : 'text-gray-400 hover:text-pink-400'
+                  }`}
+                >
+                  {playMode === 'repeat' ? (
+                    <Repeat className="w-5 h-5" />
+                  ) : playMode === 'shuffle' ? (
+                    <Shuffle className="w-5 h-5" />
+                  ) : (
+                    <Repeat className="w-5 h-5 opacity-40" />
+                  )}
+                </button>
 
-      {/* Playback control click targets */}
-      <div className="btn btn-prev" onClick={prev} />
-      <div className="btn btn-play" onClick={togglePlay} />
-      <div className="btn btn-next" onClick={next} />
+                <button
+                  onClick={prev}
+                  disabled={tracks.length === 0}
+                  className="p-2.5 rounded-full bg-pink-50 text-pink-600 hover:bg-pink-100 hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
+                >
+                  <SkipBack className="w-5 h-5 fill-current" />
+                </button>
 
-      {/* Volume bar layers — shown on hover or drag */}
-      {(volumeHovered || volumeDragging) && (
-        <>
-          <img src={assets.volumeBarLow} className="layer layer-ui volume-bar-layer" alt="" draggable={false} />
-          <img
-            src={assets.volumeBarHigh}
-            className="layer layer-ui volume-bar-layer"
-            alt=""
-            draggable={false}
-            style={{
-              clipPath: `inset(${((1 - (muted ? 0 : volume)) * (420 - 338) / 512 + 338 / 512) * 100}% 0 0 0)`,
-            }}
-          />
-        </>
-      )}
+                <button
+                  onClick={togglePlay}
+                  disabled={tracks.length === 0}
+                  className="p-4 rounded-full bg-gradient-to-r from-pink-500 to-rose-400 text-white shadow-md shadow-pink-200 hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
+                >
+                  {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-0.5" />}
+                </button>
 
-      {/* Volume icon — hover to reveal bar */}
-      <div
-        className={`volume-hover-zone ${(volumeHovered || volumeDragging) ? 'expanded' : ''}`}
-        onMouseLeave={() => { if (!volumeDragging) setVolumeHovered(false); }}
-      >
-        <div
-          className="btn-volume-icon"
-          onClick={toggleMute}
-          onMouseEnter={() => setVolumeHovered(true)}
-        />
-        {(volumeHovered || volumeDragging) && (
-          <div
-            className="volume-bar-area"
-            ref={volumeBarRef}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              setVolumeDragging(true);
-              const rect = e.currentTarget.getBoundingClientRect();
-              const pct = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
-              setVolume(pct);
-            }}
-          />
-        )}
-      </div>
+                <button
+                  onClick={next}
+                  disabled={tracks.length === 0}
+                  className="p-2.5 rounded-full bg-pink-50 text-pink-600 hover:bg-pink-100 hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
+                >
+                  <SkipForward className="w-5 h-5 fill-current" />
+                </button>
 
-      {/* Shuffle/repeat click target */}
-      <div className="btn btn-playmode" onClick={cyclePlayMode} title={playMode} />
+                <button
+                  onClick={toggleMute}
+                  className="p-2 rounded-full text-gray-400 hover:text-pink-400 hover:bg-pink-50 transition-colors"
+                >
+                  {muted || volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                </button>
+              </div>
 
-      {/* Window control click targets */}
-      <div className="btn btn-minimize" onClick={() => window.cupid?.minimize()} />
-      <div className="btn btn-window" onClick={() => window.cupid?.maximize()} />
-      <div className="btn btn-exit" onClick={() => window.cupid?.close()} />
+              {/* Slider de Volume */}
+              <div className="w-3/4 flex items-center gap-3 mt-4">
+                <VolumeX className="w-4 h-4 text-gray-400" />
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={muted ? 0 : volume}
+                  onChange={(e) => setVolume(parseFloat(e.target.value))}
+                  className="w-full h-1 bg-pink-100 rounded-lg appearance-none cursor-pointer accent-pink-400 focus:outline-none"
+                  style={{
+                    background: `linear-gradient(to right, #F472B6 0%, #F472B6 ${(muted ? 0 : volume) * 100}%, #FEE2E2 ${(muted ? 0 : volume) * 100}%, #FEE2E2 100%)`
+                  }}
+                />
+                <Volume2 className="w-4 h-4 text-gray-400" />
+              </div>
 
-      {/* Settings button */}
-      <div className="btn btn-settings" onClick={() => setShowSettings((v) => !v)} />
-
-      {/* Debug overlays — toggle with showDebug state */}
-      {showDebug && (
-        <>
-          <div className="debug-overlay btn btn-prev" />
-          <div className="debug-overlay btn btn-play" />
-          <div className="debug-overlay btn btn-next" />
-          <div className="debug-overlay volume-hover-zone" />
-          <div className="debug-overlay volume-bar-area-debug" />
-          <div className="debug-overlay btn btn-playmode" />
-        </>
-      )}
-
-      {/* Settings panel */}
-      {showSettings && (
-        <div className="settings-panel">
-          <div className="settings-panel-inner">
-            <div className="settings-label">theme</div>
-            <div className="settings-theme-row">
-              <button
-                className={`settings-theme-btn ${theme === 'pink' ? 'active' : ''}`}
-                onClick={() => { if (theme !== 'pink') toggleTheme(); }}
-              >
-                pink
-              </button>
-              <button
-                className={`settings-theme-btn ${theme === 'blue' ? 'active' : ''}`}
-                onClick={() => { if (theme !== 'blue') toggleTheme(); }}
-              >
-                blue
-              </button>
             </div>
-            <div className="settings-label">music</div>
-            <SettingsDropdown
-              value={musicService}
-              options={[
-                { value: 'local', label: 'local' },
-                { value: 'spotify', label: 'spotify' },
-                { value: 'apple', label: 'apple' },
-                { value: 'youtube', label: 'youtube' },
-              ]}
-              onChange={(next) => {
-                setMusicService(next);
-                try { localStorage.setItem('cupid-player-music-service', next); } catch { /* ignore */ }
-                if (next === 'local') setSource('local');
-              }}
+
+            {/* Lado Direito: Playlist de Músicas */}
+            <div className="md:col-span-6 bg-white/80 backdrop-blur-md rounded-3xl p-6 shadow-md border border-pink-100/50 flex flex-col h-[480px]">
+              <h2 className="text-lg font-bold text-gray-800 font-['Fredoka'] mb-4 flex items-center gap-2">
+                <Music className="w-5 h-5 text-pink-500" />
+                Sua Playlist 💖
+              </h2>
+
+              {loadingTracks ? (
+                <div className="flex-1 flex items-center justify-center text-pink-400 text-sm">
+                  Carregando músicas fofas...
+                </div>
+              ) : tracks.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-gray-400 text-sm gap-2">
+                  <p>Nenhuma música encontrada.</p>
+                  <p className="text-xs text-pink-400">Adicione arquivos MP3 na pasta public/music/</p>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                  {tracks.map((t, idx) => {
+                    const isCurrent = idx === trackIndex;
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          if (isCurrent) {
+                            togglePlay();
+                          } else {
+                            seek(0);
+                            setTrackIndex(idx);
+                          }
+                        }}
+                        className={`w-full flex items-center gap-3 p-2.5 rounded-2xl text-left transition-all ${
+                          isCurrent 
+                            ? 'bg-pink-100/70 border border-pink-200/50 shadow-sm shadow-pink-100' 
+                            : 'hover:bg-pink-50/50 border border-transparent'
+                        }`}
+                      >
+                        <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-pink-100 flex-shrink-0">
+                          <img 
+                            src={t.art || 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=100'} 
+                            alt={t.title} 
+                            className="w-full h-full object-cover" 
+                          />
+                          {isCurrent && isPlaying && (
+                            <div className="absolute inset-0 bg-pink-500/30 flex items-center justify-center">
+                              <span className="flex gap-0.5 items-end h-3">
+                                <span className="w-0.75 bg-white rounded-full animate-music-bar-1"></span>
+                                <span className="w-0.75 bg-white rounded-full animate-music-bar-2"></span>
+                                <span className="w-0.75 bg-white rounded-full animate-music-bar-3"></span>
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className={`font-semibold text-xs md:text-sm truncate ${isCurrent ? 'text-pink-700' : 'text-gray-800'}`}>
+                            {t.title}
+                          </h3>
+                          <p className="text-xs text-gray-500 truncate">{t.artist}</p>
+                        </div>
+                        <Heart className={`w-4 h-4 flex-shrink-0 ${isCurrent ? 'text-pink-500 fill-pink-500' : 'text-gray-300'}`} />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+          </div>
+        )}
+
+        {/* Aba do Álbum de Fotos */}
+        {activeTab === 'fotos' && (
+          <div className="mt-2 flex flex-col">
+            
+            {/* Cabeçalho da Galeria */}
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-bold text-gray-800 font-['Fredoka'] flex items-center gap-2">
+                <ImageIcon className="w-5 h-5 text-pink-500" />
+                Álbum da Lívia 🌸
+              </h2>
+              
+              <div className="text-xs text-pink-500/80 bg-pink-100/50 px-3 py-1 rounded-full font-medium">
+                {allPhotos.length} fotos salvas
+              </div>
+            </div>
+
+            {loadingPhotos ? (
+              <div className="text-center py-20 text-pink-400">
+                Carregando fotos com carinho...
+              </div>
+            ) : allPhotos.length === 0 ? (
+              <div className="text-center py-20 bg-white/50 rounded-3xl border border-pink-100 flex flex-col items-center justify-center p-6 gap-2">
+                <ImageIcon className="w-12 h-12 text-pink-300" />
+                <p className="text-gray-500 font-semibold">Seu álbum está vazio!</p>
+                <p className="text-xs text-gray-400">Use o botão flutuante abaixo para adicionar novas fotos.</p>
+              </div>
+            ) : (
+              /* Grid Estilo Pinterest/Instagram */
+              <div className="columns-2 sm:columns-3 md:columns-4 gap-4 space-y-4">
+                {allPhotos.map((photo, idx) => (
+                  <div
+                    key={photo.id}
+                    onClick={() => setActivePhotoIndex(idx)}
+                    className="break-inside-avoid relative bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-md hover:scale-[1.02] border border-pink-100/50 transition-all cursor-pointer group"
+                  >
+                    <img 
+                      src={photo.url} 
+                      alt={photo.caption} 
+                      className="w-full h-auto object-cover max-h-72" 
+                      loading="lazy"
+                    />
+                    
+                    {/* Overlay com botão excluir (se for do usuário) e caption */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-pink-900/50 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-3">
+                      <div className="flex justify-end">
+                        {!photo.isDefault && (
+                          <button
+                            onClick={(e) => handleDeletePhoto(photo.id, e)}
+                            className="p-1.5 rounded-full bg-white/95 text-red-500 shadow hover:bg-red-50 active:scale-95 transition-all"
+                            title="Excluir Foto"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-white text-xs font-medium truncate drop-shadow">
+                        {photo.caption || 'Foto linda ✨'}
+                      </p>
+                    </div>
+
+                    {/* Legenda básica sempre visível */}
+                    <div className="p-3 bg-white">
+                      <p className="text-gray-700 text-xs font-semibold line-clamp-2">
+                        {photo.caption}
+                      </p>
+                      {photo.date && (
+                        <span className="text-[10px] text-gray-400 flex items-center gap-1 mt-1">
+                          <Calendar className="w-3 h-3 text-pink-300" />
+                          {new Date(photo.date).toLocaleDateString('pt-BR')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Input de Arquivo Escondido */}
+            <input
+              type="file"
+              id="photo-upload-input"
+              accept="image/*"
+              className="hidden"
+              onChange={handlePhotoUpload}
             />
 
-            {musicService === 'local' && (
-              <button
-                className="settings-theme-btn"
-                onClick={loadLocalPlaylist}
-              >
-                reload
-              </button>
-            )}
+            {/* Botão Flutuante (FAB) para Adicionar Foto */}
+            <label
+              htmlFor="photo-upload-input"
+              className="fixed bottom-24 right-6 z-40 p-4 rounded-full bg-gradient-to-r from-pink-500 to-rose-400 text-white shadow-lg shadow-pink-300/40 hover:scale-105 active:scale-95 cursor-pointer transition-all flex items-center justify-center"
+              title="Adicionar Nova Foto"
+            >
+              <Plus className="w-6 h-6" />
+            </label>
 
-            {musicService === 'spotify' && (
-              !spotifyConnected ? (
-                <button className="settings-theme-btn" onClick={() => spotifyLogin()}>
-                  log in
-                </button>
-              ) : (
-                <>
-                  <PlaylistList
-                    loading={loadingPlaylists}
-                    playlists={spotifyPlaylists}
-                    loadingPlaylist={loadingPlaylist}
-                    onSelect={(id) => loadPlaylist(id, 'spotify')}
-                  />
-                  <div className="settings-theme-row">
-                    <button
-                      className={`settings-theme-btn ${loadingPlaylists ? 'disabled' : ''}`}
-                      disabled={loadingPlaylists}
-                      onClick={() => loadSpotifyPlaylists()}
-                    >
-                      refresh
-                    </button>
-                    <button className="settings-theme-btn" onClick={() => {
-                      spotifyLogout();
-                      setSpotifyConnected(false);
-                      setSpotifyPlaylists([]);
-                      if (source === 'streaming') setSource('local');
-                    }}>
-                      logout
-                    </button>
-                  </div>
-                </>
-              )
-            )}
+          </div>
+        )}
 
-            {musicService === 'apple' && (
-              !appleConnected ? (
-                <button className="settings-theme-btn" onClick={async () => {
-                  try {
-                    await appleLogin();
-                    setAppleConnected(true);
-                    loadApplePlaylists();
-                  } catch (err) {
-                    setSettingsError(err.message);
-                  }
-                }}>
-                  log in
-                </button>
-              ) : (
-                <>
-                  <PlaylistList
-                    loading={loadingPlaylists}
-                    playlists={applePlaylists}
-                    loadingPlaylist={loadingPlaylist}
-                    onSelect={(id) => loadPlaylist(id, 'apple')}
-                  />
-                  <div className="settings-theme-row">
-                    <button
-                      className={`settings-theme-btn ${loadingPlaylists ? 'disabled' : ''}`}
-                      disabled={loadingPlaylists}
-                      onClick={() => loadApplePlaylists()}
-                    >
-                      refresh
-                    </button>
-                    <button className="settings-theme-btn" onClick={() => {
-                      appleLogout();
-                      setAppleConnected(false);
-                      setApplePlaylists([]);
-                      if (source === 'streaming') setSource('local');
-                    }}>
-                      logout
-                    </button>
-                  </div>
-                </>
-              )
-            )}
+      </main>
 
-            {musicService === 'youtube' && (
-              isYouTubeConfigured() ? (
-                !youtubeConnected ? (
-                  <button
-                    className={`settings-theme-btn ${youtubeLoggingIn ? 'disabled' : ''}`}
-                    disabled={youtubeLoggingIn}
-                    onClick={async () => {
-                      setYoutubeLoggingIn(true);
-                      setSettingsError(null);
-                      try {
-                        await youtubeLogin();
-                        setYoutubeConnected(true);
-                        loadYoutubePlaylists();
-                      } catch (err) {
-                        setSettingsError(err.message);
-                      } finally {
-                        setYoutubeLoggingIn(false);
-                      }
-                    }}
-                  >
-                    {youtubeLoggingIn ? 'waiting for browser...' : 'log in with google'}
-                  </button>
-                ) : (
-                  <>
-                    <PlaylistList
-                      loading={loadingPlaylists}
-                      playlists={youtubePlaylists}
-                      loadingPlaylist={loadingPlaylist}
-                      onSelect={(id) => loadPlaylist(id, 'youtube')}
-                    />
-                    <div className="settings-theme-row">
-                      <button
-                        className={`settings-theme-btn ${loadingPlaylists ? 'disabled' : ''}`}
-                        disabled={loadingPlaylists}
-                        onClick={() => loadYoutubePlaylists()}
-                      >
-                        refresh
-                      </button>
-                      <button className="settings-theme-btn" onClick={() => {
-                        youtubeLogout();
-                        setYoutubeConnected(false);
-                        setYoutubePlaylists([]);
-                        if (source === 'streaming') setSource('local');
-                      }}>
-                        logout
-                      </button>
-                    </div>
-                  </>
-                )
-              ) : (
-                <>
-                  <input
-                    className="settings-input"
-                    type="text"
-                    placeholder="paste a youtube playlist link"
-                    value={youtubeUrlInput}
-                    onChange={(e) => setYoutubeUrlInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && youtubeUrlInput.trim()) {
-                        loadYoutubePlaylistFromUrl(youtubeUrlInput.trim());
-                      }
-                    }}
-                    disabled={loadingPlaylist}
-                  />
-                  <button
-                    className={`settings-theme-btn ${loadingPlaylist || !youtubeUrlInput.trim() ? 'disabled' : ''}`}
-                    onClick={() => loadYoutubePlaylistFromUrl(youtubeUrlInput.trim())}
-                    disabled={loadingPlaylist || !youtubeUrlInput.trim()}
-                  >
-                    {loadingPlaylist ? 'loading...' : 'load playlist'}
-                  </button>
-                </>
-              )
-            )}
+      {/* Mini Player Flutuante (aparece na aba de Fotos) */}
+      {activeTab === 'fotos' && track && track.title !== 'No track' && (
+        <div 
+          onClick={() => setActiveTab('musica')}
+          className="fixed bottom-20 left-4 right-4 md:left-auto md:right-6 md:w-80 bg-white/90 backdrop-blur-md rounded-2xl p-3 border border-pink-100/80 shadow-lg shadow-pink-200/20 flex items-center justify-between cursor-pointer hover:bg-pink-50/50 transition-all z-30"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <img
+              src={track.art || 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=80'}
+              alt={track.title}
+              className={`w-10 h-10 rounded-xl object-cover flex-shrink-0 border border-pink-100 ${isPlaying ? 'animate-spin-slow' : ''}`}
+            />
+            <div className="min-w-0">
+              <h4 className="text-xs font-bold text-gray-800 truncate font-['Fredoka']">{track.title}</h4>
+              <p className="text-[10px] text-pink-500 font-semibold truncate">{track.artist}</p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={togglePlay}
+              className="p-2 rounded-full bg-pink-100 text-pink-600 hover:bg-pink-200 transition-colors"
+            >
+              {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current ml-0.5" />}
+            </button>
+            <button
+              onClick={next}
+              className="p-2 rounded-full text-gray-400 hover:text-pink-500 transition-colors"
+            >
+              <SkipForward className="w-3.5 h-3.5 fill-current" />
+            </button>
+          </div>
 
-            {settingsError && <div className="settings-error">{settingsError}</div>}
+          {/* Mini Barra de Progresso no Topo */}
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-pink-100 rounded-t-2xl overflow-hidden">
+            <div className="h-full bg-pink-400" style={{ width: `${progress * 100}%` }}></div>
           </div>
         </div>
       )}
+
+      {/* Barra de Navegação Inferior Fixa (iOS Style) */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-pink-100/60 flex justify-around py-3 px-6 z-40 pb-safe shadow-inner">
+        <button
+          onClick={() => setActiveTab('musica')}
+          className={`flex flex-col items-center gap-0.5 font-medium transition-all ${
+            activeTab === 'musica' ? 'text-pink-500 scale-105' : 'text-gray-400 hover:text-pink-400'
+          }`}
+        >
+          <Music className="w-6 h-6" />
+          <span className="text-[10px]">Músicas</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('fotos')}
+          className={`flex flex-col items-center gap-0.5 font-medium transition-all ${
+            activeTab === 'fotos' ? 'text-pink-500 scale-105' : 'text-gray-400 hover:text-pink-400'
+          }`}
+        >
+          <ImageIcon className="w-6 h-6" />
+          <span className="text-[10px]">Álbum</span>
+        </button>
+      </nav>
+
+      {/* Modal Expandido do Visualizador de Fotos (Slideshow com Gestos) */}
+      {activePhotoIndex !== null && allPhotos[activePhotoIndex] && (
+        <div 
+          className="fixed inset-0 bg-neutral-950/90 backdrop-blur-md z-50 flex flex-col items-center justify-center p-4 select-none touch-none"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        >
+          {/* Botão Fechar */}
+          <button
+            onClick={() => setActivePhotoIndex(null)}
+            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 text-white/80 hover:bg-white/20 active:scale-90 transition-all z-10"
+          >
+            <X className="w-6 h-6" />
+          </button>
+
+          {/* Botão Excluir (no modal) se for do usuário */}
+          {!allPhotos[activePhotoIndex].isDefault && (
+            <button
+              onClick={(e) => handleDeletePhoto(allPhotos[activePhotoIndex].id, e)}
+              className="absolute top-4 left-4 p-2 rounded-full bg-white/10 text-red-400 hover:bg-white/20 hover:text-red-500 active:scale-90 transition-all z-10"
+              title="Excluir Foto"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+          )}
+
+          {/* Área Central da Imagem */}
+          <div className="relative w-full max-w-2xl flex-1 flex items-center justify-center py-8">
+            
+            {/* Seta Esquerda */}
+            <button
+              onClick={handlePrevPhoto}
+              className="absolute left-2 p-3 rounded-full bg-white/10 text-white/80 hover:bg-white/20 hover:scale-105 active:scale-95 transition-all hidden md:flex"
+            >
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+
+            {/* Imagem Exibida */}
+            <div className="relative max-h-full max-w-full flex flex-col justify-center items-center">
+              <img
+                src={allPhotos[activePhotoIndex].url}
+                alt={allPhotos[activePhotoIndex].caption}
+                className="max-h-[70vh] md:max-h-[75vh] w-auto max-w-full object-contain rounded-2xl shadow-2xl border border-white/10 select-none pointer-events-none"
+              />
+              
+              {/* Legenda */}
+              {allPhotos[activePhotoIndex].caption && (
+                <div className="mt-4 px-4 py-2 bg-white/10 backdrop-blur-md text-white text-xs md:text-sm font-semibold rounded-2xl text-center max-w-lg border border-white/5">
+                  {allPhotos[activePhotoIndex].caption}
+                </div>
+              )}
+            </div>
+
+            {/* Seta Direita */}
+            <button
+              onClick={handleNextPhoto}
+              className="absolute right-2 p-3 rounded-full bg-white/10 text-white/80 hover:bg-white/20 hover:scale-105 active:scale-95 transition-all hidden md:flex"
+            >
+              <ChevronRight className="w-6 h-6" />
+            </button>
+          </div>
+
+          {/* Dica de Uso para Mobile */}
+          <div className="text-[10px] text-gray-500 mb-2 md:hidden">
+            Deslize para o lado para navegar ⚡
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

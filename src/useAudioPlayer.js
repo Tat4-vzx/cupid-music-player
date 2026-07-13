@@ -47,8 +47,8 @@ export default function useAudioPlayer(tracks, playMode = 'normal', getAudioPath
       if (getAudioPath) {
         src = await getAudioPath(t.file);
       } else {
-        // Browser/preview fallback — Vite serves audio/ as publicDir
-        src = `./${t.file}`;
+        // Fallback para navegador PWA — busca da pasta /music/
+        src = `./music/${t.file}`;
       }
       if (cancelled || !src) return;
       audio.src = src;
@@ -167,6 +167,7 @@ export default function useAudioPlayer(tracks, playMode = 'normal', getAudioPath
   return {
     track,
     trackIndex,
+    setTrackIndex,
     isPlaying,
     progress,
     duration,
